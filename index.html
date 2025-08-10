@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>AI Post Generator — Standalone</title>
+<style>
+  :root{
+    --primary:#6c5ce7;
+    --accent:#00b894;
+    --bg:#f8f9fa;
+    --card:#f1f1f1;
+  }
+  html,body{height:100%;margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial;}
+  body{background:linear-gradient(180deg,#ffffff 0%,var(--bg) 100%);display:flex;align-items:center;justify-content:center;padding:24px;}
+  .wrap{width:100%;max-width:760px;background:white;border-radius:12px;box-shadow:0 10px 30px rgba(12,20,30,.08);padding:20px;}
+  header{display:flex;gap:16px;align-items:center}
+  .logo{width:72px;height:72px;border-radius:14px;background:linear-gradient(135deg,var(--primary),var(--accent));display:flex;align-items:center;justify-content:center;color:white;font-weight:700;font-size:20px}
+  h1{margin:0;font-size:20px}
+  p.lead{margin:6px 0 12px;color:#444}
+  textarea{width:100%;min-height:84px;padding:12px;border-radius:10px;border:1px solid #e6e9ee;font-size:14px;resize:vertical;box-sizing:border-box}
+  .controls{display:flex;gap:10px;align-items:center;margin-top:12px}
+  button.primary{background:var(--primary);border:none;color:white;padding:12px 16px;border-radius:10px;cursor:pointer;font-weight:600}
+  button.ghost{background:#fff;border:1px solid #e6e9ee;padding:10px 14px;border-radius:10px;cursor:pointer}
+  #loading{display:none;color:#444;margin-top:12px}
+  .results{margin-top:16px}
+  .post-card{background:var(--card);padding:12px;border-radius:10px;margin-bottom:12px;white-space:pre-wrap;font-size:14px}
+  .post-actions{display:flex;gap:8px;margin-top:8px}
+</style>
+</head>
+<body>
+  <div class="wrap" role="main">
+    <header>
+      <div class="logo">AI</div>
+      <div>
+        <h1>AI Post Generator</h1>
+        <p class="lead">Enter a content idea and optional story — get 3 ready-to-use social media posts.</p>
+      </div>
+    </header>
+
+    <div style="margin-top:14px">
+      <textarea id="idea" placeholder="Enter your content idea or question"></textarea>
+    </div>
+    <div style="margin-top:12px">
+      <textarea id="story" placeholder="Optional: Personal story (Pain → Turning Point → Freedom)"></textarea>
+    </div>
+
+    <div class="controls">
+      <button id="generate" class="primary">Generate 5 Posts</button>
+      <button id="downloadAll" class="ghost">Download All (.txt)</button>
+      <div id="loading">Generating...</div>
+    </div>
+
+    <div class="results" id="results" aria-live="polite"></div>
+  </div>
+
+<script>
+const OPENROUTER_API_KEY = "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";
+const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
+const MODEL_NAME = "microsoft/mai-ds-r1:free";
+
+function buildMasterPrompt(idea, story) {
+  const storyBlock = story && story.trim() !== "" 
+    ? `Include this personal story, written as PAIN → TURNING POINT → FREEDOM:\n"${story}"\n\n` 
+    : "";
+  return `
+You are an expert social media content creator.
+
+MAIN TASK:
+Generate 3 unique, engaging posts based on this content idea:
+"${idea}"
+
+${storyBlock}
+
+RULES:
+1. Use simple, conversational English.
+2. Each post must open with a strong hook.
+3. Format each post as: Hook → Body → Call-to-action.
+4. Avoid generic advice.
+5. Inject curiosity and a clear CTA.
+6. Use storytelling when relevant.
+7. Provide 3 distinct posts with different hooks.
+8. If story provided, weave it into at least 2 posts.
+
+POST TEMPLATES (Pack 1):
+- It's not [X], it's [Y].
+- I used to think [X], but now I know [Y].
+- [X] would have you believe that [Y].
+- I hate it when [X].
+- [X] think that... But [Y] know that...
+- Bad [X] do [Y], good [X] do [Z].
+- It's OK to do [X].
+- The more you [good thing], the less you [bad thing].
+- Beginners do [X], intermediates do [Y], experts do [Z].
+- Good [X] do [Y], great [X] do [Z].
+- Using dialogues.
+- Real talk: confess emotion.
+- Stop [X], Start [Y].
+- [X] is [Y] disguised as [Z].
+- You were not born for [X].
+
+POST TEMPLATES (Pack 2):
+- unpopular_opinion
+- dont_do_this_do_that
+- the_best_something
+- dont_need_you_need
+- unspoken_truth
+- life_hack
+- compelling_story
+- complaint
+- beginner_mistakes
+- comparison
+- numbered_list
+- challenge
+- transformation
+- hidden_truth
+
+OUTPUT RULES:
+- Return exactly 5 posts.
+- Number them 1. through 5.
+- Each post concise (≤ 220 words).
+`;
+}
+
+const ideaEl = document.getElementById("idea");
+const storyEl = document.getElementById("story");
+const generateBtn = document.getElementById("generate");
+const loadingEl = document.getElementById("loading");
+const resultsEl = document.getElementById("results");
+const downloadBtn = document.getElementById("downloadAll");
+
+function splitNumbered(output){
+  const parts = output.split(/\n(?=\s*[1-5][\.\)]\s)/).map(p => p.trim()).filter(Boolean);
+  return parts.length >= 5 ? parts : [output];
+}
+
+async function generatePosts(){
+  const idea = ideaEl.value.trim();
+  const story = storyEl.value.trim();
+  if(!idea){ alert("Please enter a content idea."); return; }
+
+  generateBtn.disabled = true;
+  loadingEl.style.display = "inline-block";
+  resultsEl.innerHTML = "";
+
+  try {
+    const body = {
+      model: MODEL_NAME,
+      messages: [
+        { role: "system", content: "You are a professional social media content generator." },
+        { role: "user", content: buildMasterPrompt(idea, story) }
+      ]
+    };
+
+    const resp = await fetch(OPENROUTER_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer " + OPENROUTER_API_KEY
+      },
+      body: JSON.stringify(body)
+    });
+
+    if(!resp.ok) throw new Error(await resp.text());
+    const data = await resp.json();
+    const content = data?.choices?.[0]?.message?.content ?? "";
+    const posts = splitNumbered(content);
+
+    posts.forEach(post => {
+      const card = document.createElement("div");
+      card.className = "post-card";
+      card.textContent = post;
+
+      const actions = document.createElement("div");
+      actions.className = "post-actions";
+
+      const copyBtn = document.createElement("button");
+      copyBtn.textContent = "Copy";
+      copyBtn.className = "ghost";
+      copyBtn.onclick = async () => {
+        await navigator.clipboard.writeText(post);
+        copyBtn.textContent = "Copied!";
+        setTimeout(()=>copyBtn.textContent="Copy",1500);
+      };
+
+      const shareBtn = document.createElement("button");
+      shareBtn.textContent = "Share";
+      shareBtn.className = "ghost";
+      shareBtn.onclick = async () => {
+        if(navigator.share){
+          await navigator.share({ text: post });
+        } else {
+          await navigator.clipboard.writeText(post);
+          alert("Share not supported. Copied to clipboard.");
+        }
+      };
+
+      actions.appendChild(copyBtn);
+      actions.appendChild(shareBtn);
+      card.appendChild(actions);
+      resultsEl.appendChild(card);
+    });
+
+  } catch (err) {
+    resultsEl.innerHTML = `<div style="color:red;">Error: ${err.message}</div>`;
+  }
+
+  generateBtn.disabled = false;
+  loadingEl.style.display = "none";
+}
+
+downloadBtn.onclick = () => {
+  const cards = document.querySelectorAll(".post-card");
+  if(!cards.length){ alert("No posts to download."); return; }
+  const text = Array.from(cards).map(c=>c.firstChild.textContent).join("\n\n");
+  const blob = new Blob([text], { type: "text/plain" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "posts.txt";
+  a.click();
+};
+
+generateBtn.addEventListener("click", generatePosts);
+</script>
+</body>
+</html>
